@@ -23,7 +23,7 @@ parser.add_argument('--save_path', type=str, required=True,
 parser.add_argument("--epoch", type=int, default=20, 
                     help="training epochs")
 parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
-parser.add_argument("--batch_size", default=12, type=int)
+parser.add_argument("--batch_size", default=5, type=int)
 parser.add_argument("--weight_decay", default=5e-4, type=float)
 args = parser.parse_args()
 
@@ -41,7 +41,7 @@ def structure_loss(pred, mask):
 
 def main(args):    
     dataset = FullDataset(args.train_image_path, args.train_mask_path, 352, mode='train')
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=8)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=2)
     device = torch.device("cuda")
     model = SAM2UNet(args.hiera_path)
     model.to(device)
@@ -62,8 +62,9 @@ def main(args):
             loss = loss0 + loss1 + loss2
             loss.backward()
             optim.step()
-            if i % 50 == 0:
-                print("epoch:{}-{}: loss:{}".format(epoch + 1, i + 1, loss.item()))
+            # if i % 50 == 0:
+            # print("epoch:{}-{}: loss:{}".format(epoch + 1, i + 1, loss.item()))
+            print("epoch:{}: loss:{}".format(epoch, loss.item()))
                 
         scheduler.step()
         if (epoch+1) % 5 == 0 or (epoch+1) == args.epoch:
