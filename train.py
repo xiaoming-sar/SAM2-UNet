@@ -64,7 +64,7 @@ def main(args):
             optim.step()
             # if i % 50 == 0:
             # print("epoch:{}-{}: loss:{}".format(epoch + 1, i + 1, loss.item()))
-            print("epoch:{}: loss:{}".format(epoch, loss.item()))
+        print("epoch:{}: loss:{}".format(epoch, loss.item()))
                 
         scheduler.step()
         if (epoch+1) % 5 == 0 or (epoch+1) == args.epoch:

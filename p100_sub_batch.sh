@@ -36,6 +36,6 @@ python train.py \
 --train_image_path "/cluster/projects/nn10004k/ml_SeaObject_Data/OASIs_dataset_patch896_exclude_ukan/TYPE2/images/" \
 --train_mask_path "/cluster/projects/nn10004k/ml_SeaObject_Data/OASIs_dataset_patch896_exclude_ukan/TYPE2/masks/3/" \
 --save_path "/cluster/projects/nn10004k/packages_install/sam2_results" \
---epoch 1 \
+--epoch 50 \
 --lr 0.001 \
---batch_size 4
+--batch_size 12

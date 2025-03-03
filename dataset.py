@@ -2,6 +2,7 @@ import torchvision.transforms.functional as F
 import numpy as np
 import random
 import os
+import torch
 from PIL import Image
 from torchvision.transforms import InterpolationMode
 from torch.utils.data import Dataset
@@ -139,6 +140,91 @@ class TestDataset:
             img = Image.open(f)
             return img.convert('RGB')
 
+    def binary_loader(self, path):
+        with open(path, 'rb') as f:
+            img = Image.open(f)
+            return img.convert('L')
+
+class MultiClassDataset(Dataset):
+    def __init__(self, image_root, mask_root, size, mode, num_classes=4):
+        # Load image paths
+        self.images = [image_root + f for f in os.listdir(image_root) if f.endswith('.jpg') or f.endswith('.png')]
+        self.images = sorted(self.images)
+        
+        # Store mask root folder
+        self.mask_root = mask_root
+        self.num_classes = num_classes
+        
+        # Dictionary to store mask paths by class
+        self.mask_folders = {}
+        for class_idx in range(num_classes):
+            class_folder = os.path.join(mask_root, str(class_idx))
+            if os.path.exists(class_folder):
+                self.mask_folders[class_idx] = class_folder
+            else:
+                raise ValueError(f"Mask folder for class {class_idx} not found at {class_folder}")
+        
+        # Set up transformations
+        if mode == 'train':
+            self.transform = transforms.Compose([
+                Resize((size, size)),
+                RandomHorizontalFlip(p=0.5),
+                RandomVerticalFlip(p=0.5),
+                ToTensor(),
+                Normalize()
+            ])
+        else:
+            self.transform = transforms.Compose([
+                Resize((size, size)),
+                ToTensor(),
+                Normalize()
+            ])
+    
+    def __getitem__(self, idx):
+        # Load image
+        image_path = self.images[idx]
+        image = self.rgb_loader(image_path)
+        
+        # Extract image filename for matching with masks
+        image_filename = os.path.basename(image_path)
+        file_stem = os.path.splitext(image_filename)[0]
+        
+        # Load masks for each class
+        masks = []
+        for class_idx in range(self.num_classes):
+            class_folder = self.mask_folders.get(class_idx)
+            
+            # Look for matching mask file
+            mask_path = os.path.join(class_folder, f"{file_stem}.png")
+            if os.path.exists(mask_path):
+                # Load mask and convert to binary
+                mask = self.binary_loader(mask_path)
+                masks.append(mask)
+            else:
+                # If mask doesn't exist for this class, create empty mask
+                mask = Image.new('L', image.size, 0)
+                masks.append(mask)
+        
+        # Apply transform to image
+        transformed_data = self.transform({'image': image, 'masks': masks})
+        
+        # Stack transformed masks into a multi-channel tensor
+        # Each channel corresponds to one class
+        stacked_masks = torch.stack(transformed_data['masks'], dim=0)
+        
+        return {
+            'image': transformed_data['image'],
+            'label': stacked_masks
+        }
+    
+    def __len__(self):
+        return len(self.images)
+    
+    def rgb_loader(self, path):
+        with open(path, 'rb') as f:
+            img = Image.open(f)
+            return img.convert('RGB')
+    
     def binary_loader(self, path):
         with open(path, 'rb') as f:
             img = Image.open(f)
