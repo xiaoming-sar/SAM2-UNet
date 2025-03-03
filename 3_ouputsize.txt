@@ -1,0 +1,13 @@
+# 1 ouput dimensions before modification 
+Input x shape: torch.Size([3, 3, 896, 896])
+Encoder outputs x1, x2, x3, x4 shapes: torch.Size([3, 144, 224, 224]) torch.Size([3, 288, 112, 112]) torch.Size([3, 576, 56, 56]) torch.Size([3, 1152, 28, 28])
+RFB outputs x1, x2, x3, x4 shapes: torch.Size([3, 64, 224, 224]) torch.Size([3, 64, 112, 112]) torch.Size([3, 64, 56, 56]) torch.Size([3, 64, 28, 28])
+Up1 output x shape: torch.Size([3, 64, 56, 56])
+out1 shape: torch.Size([3, 4, 56, 56])
+Up2 output x shape: torch.Size([3, 64, 112, 112])
+out2 shape: torch.Size([3, 4, 112, 112])
+Up3 output x shape: torch.Size([3, 64, 224, 224])
+Head output out shape: torch.Size([3, 4, 224, 224])
+Final out shape: torch.Size([3, 4, 224, 224])
+torch.Size([3, 4, 224, 224]) torch.Size([3, 4, 56, 56]) torch.Size([3, 4, 112, 112])
+the shape of pred0, pred1, pred2: torch.Size([3, 4, 224, 224]) torch.Size([3, 4, 56, 56]) torch.Size([3, 4, 112, 112])
