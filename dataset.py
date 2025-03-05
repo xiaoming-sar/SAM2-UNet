@@ -2,8 +2,7 @@ import torchvision.transforms.functional as F
 import numpy as np
 import random
 import os
-import torch
-from PIL import Image
+# import torch
 from torchvision.transforms import InterpolationMode
 from torch.utils.data import Dataset
 from torchvision import transforms
@@ -25,7 +24,7 @@ class Resize(object):
     def __call__(self, data):
         image, label = data['image'], data['label']
 
-        return {'image': F.resize(image, self.size), 'label': F.resize(label, self.size, interpolation=InterpolationMode.BICUBIC)}
+        return {'image': F.resize(image, self.size), 'label': F.resize(label, self.size, interpolation=InterpolationMode.)}
 
 
 class RandomHorizontalFlip(object):
@@ -204,17 +203,19 @@ class MultiClassDataset(Dataset):
                 # If mask doesn't exist for this class, create empty mask
                 mask = Image.new('L', image.size, 0)
                 masks.append(mask)
-        
+        #conver masks to numpy array
+        masks = [np.array(mask) for mask in masks]
+        masks = np.stack(masks, axis=0) #(4, 896, 896) --> (num_classes, size, size)
         # Apply transform to image
-        transformed_data = self.transform({'image': image, 'masks': masks})
+        transformed_data = self.transform({'image': image, 'label': masks})
         
         # Stack transformed masks into a multi-channel tensor
         # Each channel corresponds to one class
-        stacked_masks = torch.stack(transformed_data['masks'], dim=0)
+        # stacked_masks = torch.stack(transformed_data['masks'], dim=0)
         
         return {
             'image': transformed_data['image'],
-            'label': stacked_masks
+            'label': transformed_data['label']
         }
     
     def __len__(self):

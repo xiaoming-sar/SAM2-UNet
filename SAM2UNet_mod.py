@@ -29,9 +29,9 @@ class Up(nn.Module):
 
     def __init__(self, in_channels, out_channels):
         super().__init__()
-
-        self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-        self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
+        #upsample replaced channels by half
+        self.up = nn.ConvTranspose2d(in_channels, in_channels//2, kernel_size=2, stride=2)
+        self.conv = DoubleConv(in_channels//2 + in_channels, out_channels)
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
@@ -54,16 +54,15 @@ class Adapter(nn.Module):
         self.block = blk
         dim = blk.attn.qkv.in_features
         self.prompt_learn = nn.Sequential(
-            nn.Linear(dim, 32),
+            nn.Linear(dim, 128),
             nn.GELU(),
-            nn.Linear(32, dim),
+            nn.Linear(128, dim),
             nn.GELU()
         )
 
     def forward(self, x):
         prompt = self.prompt_learn(x)
-        promped = x + prompt
-        net = self.block(promped)
+        net = self.block(x + prompt) #residual connection
         return net
     
 
@@ -149,49 +148,49 @@ class SAM2UNet(nn.Module):
         self.encoder.blocks = nn.Sequential(
             *blocks
         )
-        self.rfb1 = RFB_modified(144, 64)
-        self.rfb2 = RFB_modified(288, 64)
-        self.rfb3 = RFB_modified(576, 64)
-        self.rfb4 = RFB_modified(1152, 64)
-        self.up1 = (Up(128, 64))
-        self.up2 = (Up(128, 64))
-        self.up3 = (Up(128, 64))
-        self.up4 = (Up(128, 64))
-        self.side1 = nn.Conv2d(64, num_classes, kernel_size=1)
-        self.side2 = nn.Conv2d(64, num_classes, kernel_size=1)
-        self.head = nn.Conv2d(64, num_classes, kernel_size=1)
+        self.rfb1 = RFB_modified(144, 128)
+        self.rfb2 = RFB_modified(288, 128)
+        self.rfb3 = RFB_modified(576, 128)
+        self.rfb4 = RFB_modified(1152, 128)
+        self.up1 = (Up(128, 128))
+        self.up2 = (Up(128, 128))
+        self.up3 = (Up(128, 128))
+        self.up4 = (Up(128, 128))
+        self.side1 = nn.Conv2d(128, num_classes, kernel_size=1)
+        self.side2 = nn.Conv2d(128, num_classes, kernel_size=1)
+        self.head = nn.Conv2d(128, num_classes, kernel_size=1)
 
     def forward(self, x):
-        print("Input x shape:", x.shape)
+        # print("Input x shape:", x.shape)
         x1, x2, x3, x4 = self.encoder(x)
-        print("Encoder outputs x1, x2, x3, x4 shapes:", x1.shape, x2.shape, x3.shape, x4.shape)
+        # print("Encoder outputs x1, x2, x3, x4 shapes:", x1.shape, x2.shape, x3.shape, x4.shape)
         x1, x2, x3, x4 = self.rfb1(x1), self.rfb2(x2), self.rfb3(x3), self.rfb4(x4)
-        print("RFB outputs x1, x2, x3, x4 shapes:", x1.shape, x2.shape, x3.shape, x4.shape)
+        # print("RFB outputs x1, x2, x3, x4 shapes:", x1.shape, x2.shape, x3.shape, x4.shape)
         
         x = self.up1(x4, x3)
-        print("Up1 output x shape:", x.shape)
-        out1 = F.interpolate(self.side1(x), size=x.shape[2:], mode='bilinear',align_corners=True)
-        print("out1 shape:", out1.shape)
+        # print("Up1 output x shape:", x.shape)
+        out1 = F.interpolate(self.side1(x), size=(896, 896), mode='bilinear',align_corners=True)
+        # print("out1 shape:", out1.shape)
         
         x = self.up2(x, x2)
-        print("Up2 output x shape:", x.shape)
-        out2 = F.interpolate(self.side2(x), size=x.shape[2:], mode='bilinear',align_corners=True)
-        print("out2 shape:", out2.shape)
+        # print("Up2 output x shape:", x.shape)
+        out2 = F.interpolate(self.side2(x), size=(896, 896), mode='bilinear',align_corners=True)
+        # print("out2 shape:", out2.shape)
         
         x = self.up3(x, x1)
-        print("Up3 output x shape:", x.shape)
+        # print("Up3 output x shape:", x.shape)
         out = self.head(x)
-        print("Head output out shape:", out.shape)
+        # print("Head output out shape:", out.shape)
 
-        out = F.interpolate(out, size=x.shape[2:], mode='bilinear', align_corners=True)
-        print("Final out shape:", out.shape)
-        print(out.shape, out1.shape, out2.shape)
+        out = F.interpolate(out, size=(896, 896), mode='bilinear', align_corners=True)
+        # print("Final out shape:", out.shape)
+        # print(out.shape, out1.shape, out2.shape)
         return out, out1, out2
 
 
-if __name__ == "__main__":
-    with torch.no_grad():
-        model = SAM2UNet().cuda()
-        x = torch.randn(1, 3, 896, 896).cuda()
-        out, out1, out2 = model(x)
-        print(out.shape, out1.shape, out2.shape)
+# if __name__ == "__main__":
+#     with torch.no_grad():
+#         model = SAM2UNet().cuda()
+#         x = torch.randn(1, 3, 896, 896).cuda()
+#         out, out1, out2 = model(x)
+#         print(out.shape, out1.shape, out2.shape)

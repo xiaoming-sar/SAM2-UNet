@@ -3,6 +3,8 @@ import argparse
 import random
 import numpy as np
 import torch
+import pandas as pd
+import torch.nn as nn
 from glob import glob
 import torch.optim as opt
 import torch.nn.functional as F
@@ -31,7 +33,7 @@ def parse_args():
     parser.add_argument("--num_workers", type=int, default=2, 
                         help="number of workers for dataloader")
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
-    parser.add_argument("--batch_size", default=5, type=int)
+    parser.add_argument("--batch_size", default=1, type=int)
     parser.add_argument("--weight_decay", default=5e-4, type=float)
     config = parser.parse_args()
     # print(config)
@@ -65,21 +67,70 @@ def parse_args():
 #     "num_workers": num_workers
 # }
 
+def compute_mIoU(pred, target, num_classes):
+    pred = torch.argmax(pred, dim=1)  # [B, H, W]
+    ious = []
+    for cls in range(num_classes):
+        pred_cls = (pred == cls)
+        target_cls = (target == cls)
+        intersection = (pred_cls & target_cls).sum()
+        union = (pred_cls | target_cls).sum()
+        ious.append((intersection + 1e-6) / (union + 1e-6))
+    return torch.mean(torch.tensor(ious))
 
-def structure_loss(pred, mask):
-    weit = 1 + 5*torch.abs(F.avg_pool2d(mask, kernel_size=31, stride=1, padding=15) - mask)
-    wbce = F.binary_cross_entropy_with_logits(pred, mask, reduce='none')
-    wbce = (weit*wbce).sum(dim=(2, 3)) / weit.sum(dim=(2, 3))
-    pred = torch.sigmoid(pred)
-    inter = ((pred * mask)*weit).sum(dim=(2, 3))
-    union = ((pred + mask)*weit).sum(dim=(2, 3))
-    wiou = 1 - (inter + 1)/(union - inter+1)
-    return (wbce + wiou).mean()
+class MultiClassLoss(nn.Module):
+    def __init__(self, num_classes, weight_ce=0.5, weight_dice=0.5):
+        super().__init__()
+        self.ce = nn.CrossEntropyLoss()
+        self.weight_ce = weight_ce
+        self.weight_dice = weight_dice
+        self.num_classes = num_classes
 
+    def dice_loss(self, pred, target_onehot):
+        smooth = 1.
+        pred = F.softmax(pred, dim=1)  # Shape: [B, C, H, W]
+        intersection = (pred * target_onehot).sum()
+        return 1 - (2. * intersection + smooth) / (pred.sum() + target_onehot.sum() + smooth)
 
+    def forward(self, preds, target_onehot):
+        loss = 0
+        # Convert one-hot target to class indices for CrossEntropyLoss
+        target_indices = torch.argmax(target_onehot, dim=1).long()  # Shape: [B, H, W]
+        
+        for pred in preds:
+            # Ensure pred matches target resolution
+            pred = F.interpolate(pred, size=target_onehot.shape[-2:], mode='bilinear', align_corners=True)
+            
+            # CrossEntropyLoss requires class indices (not one-hot)
+            ce_loss = self.ce(pred, target_indices)
+            
+            # Dice loss uses original one-hot target
+            dice_loss = self.dice_loss(pred, target_onehot)
+            
+            loss += self.weight_ce * ce_loss + self.weight_dice * dice_loss
+        return loss
 
-
-
+def validate(model, val_loader, criterion, device, num_classes):
+    model.eval()
+    val_loss = 0.0
+    total_mIoU = 0.0
+    with torch.no_grad():
+        for inputs, targets, _ in val_loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            
+            # Forward pass
+            pred0, pred1, pred2 = model(inputs)
+            
+            # Calculate loss
+            loss = criterion([pred0, pred1, pred2], targets)
+            val_loss += loss.item()
+            
+            # Calculate mIoU using final prediction (pred2)
+            total_mIoU += compute_mIoU(pred2, torch.argmax(targets, dim=1), num_classes)
+    
+    avg_loss = val_loss / len(val_loader)
+    avg_mIoU = total_mIoU / len(val_loader)
+    return avg_loss, avg_mIoU
 
 def main():  
     config = vars(parse_args())
@@ -100,7 +151,7 @@ def main():
     img_ext=img_ext,
     mask_ext=mask_ext
     )
-
+    # input, target, *_ = next(iter(train_loader))
    
     device = torch.device("cuda")
     model = SAM2UNet(num_classes=config['num_classes'], checkpoint_path=config['hiera_path'])
@@ -109,30 +160,72 @@ def main():
                        lr=config['lr'], weight_decay=config['weight_decay'])
     
     scheduler = CosineAnnealingLR(optim, config['epoch'], eta_min=1.0e-7)
+    criterion = MultiClassLoss(num_classes=4)
     os.makedirs(config['save_path'], exist_ok=True)
+    
+    best_mIoU = 0.0
+    log_data = []
+
     for epoch in range(config['epoch']):
+        model.train()
+        train_loss = 0.0
+        train_mIoU = 0.0
+        
         for i, (input, target, _) in enumerate(train_loader):
             input, target = input.cuda(), target.cuda()
         
             optim.zero_grad()
             pred0, pred1, pred2 = model(input)
-            print("the shape of pred0, pred1, pred2:", pred0.shape, pred1.shape, pred2.shape)
+            # print("the shape of pred0, pred1, pred2:", pred0.shape, pred1.shape, pred2.shape)
+            loss = criterion([pred0, pred1, pred2], target)
+            loss.backward()
+            optim.step()
 
-            # loss0 = structure_loss(pred0, target)
-            # loss1 = structure_loss(pred1, target)
-            # loss2 = structure_loss(pred2, target)
-            # loss = loss0 + loss1 + loss2
-            # loss.backward()
-            # optim.step()
-            # if i % 50 == 0:
-            # print("epoch:{}-{}: loss:{}".format(epoch + 1, i + 1, loss.item()))
-        # print("epoch:{}: loss:{}".format(epoch, loss.item()))
-                
+            # Update metrics
+            train_loss += loss.item()
+            with torch.no_grad():
+                train_mIoU += compute_mIoU(pred2, torch.argmax(target, dim=1), config['num_classes'])
+        # Validation Phase     
+        #=================save pred for test ========================
+        import pickle
+        #save prd0
+        with open('pred0.pkl', 'wb') as f:
+            pickle.dump(pred0, f)
+        #=================save pred for test ========================
+        val_loss, val_mIoU = validate(model, val_loader, criterion, device, config['num_classes'])
+
+        # print("epoch:{}: loss:{}".format(epoch, loss.item()))                
         scheduler.step()
-        # if (epoch+1) % 5 == 0 or (epoch+1) == args.epoch:
-        #     torch.save(model.state_dict(), os.path.join(args.save_path, 'SAM2-UNet-%d.pth' % (epoch + 1)))
-        #     print('[Saving Snapshot:]', os.path.join(args.save_path, 'SAM2-UNet-%d.pth'% (epoch + 1)))
+        # Calculate epoch metrics
+        epoch_train_loss = train_loss / len(train_loader)
+        epoch_train_mIoU = train_mIoU / len(train_loader)
+        # Logging
+        log_entry = {
+            'epoch': epoch+1,
+            'train_loss': epoch_train_loss,
+            'train_mIoU': epoch_train_mIoU,
+            'val_loss': val_loss,
+            'val_mIoU': val_mIoU,
+            'lr': scheduler.get_last_lr()[0]
+        }
+        log_data.append(log_entry)
+        
+        # Checkpointing
+        if val_mIoU > best_mIoU:
+            best_mIoU = val_mIoU
+            torch.save(model.state_dict(), 
+                    os.path.join(config['save_path'], f'best_model_{val_mIoU:.4f}.pth'))
+        
+        # Print progress
+        print(f"Epoch {epoch+1}/{config['epoch']}")
+        print(f"Train Loss: {epoch_train_loss:.4f} | Train mIoU: {epoch_train_mIoU:.4f}")
+        print(f"Val Loss: {val_loss:.4f} | Val mIoU: {val_mIoU:.4f}")
+        print(f"LR: {scheduler.get_last_lr()[0]:.6f}")
+        print("--------------------------")
 
+    # Save final logs
+    pd.DataFrame(log_data).to_csv(os.path.join(config['save_path'], 'training_log.csv'), index=False)
+  
 
 # def seed_torch(seed=1024):
 # 	random.seed(seed)
